@@ -6,6 +6,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
+import { io as socketIOClient } from 'socket.io-client';
 import {
   Home, MessageSquare, Bell, LogOut, Search, Send, Upload, FileText, Trash2,
   ChevronDown, Settings, User, Users, Zap, Lock, CreditCard
@@ -17,6 +18,7 @@ function UserDashboard() {
   const navigate = useNavigate();
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null);
+  const socketRef = useRef(null);
 
   // Auth & User State
   const [user, setUser] = useState(null);
@@ -40,6 +42,8 @@ function UserDashboard() {
   const [selectedUser, setSelectedUser] = useState(null);
   const [messages, setMessages] = useState([]);
   const [messageInput, setMessageInput] = useState('');
+  const [messageFile, setMessageFile] = useState(null);
+  const messageFileRef = useRef(null);
   const [messageSearchQuery, setMessageSearchQuery] = useState('');
   const [messageLoading, setMessageLoading] = useState(false);
   const [conversationCount, setConversationCount] = useState(0);
@@ -53,6 +57,7 @@ function UserDashboard() {
   // Resume State
   const [resumes, setResumes] = useState([]);
   const [resumeUploading, setResumeUploading] = useState(false);
+  const [resumeModalUrl, setResumeModalUrl] = useState(null);
 
   // Initialize
   useEffect(() => {
@@ -76,6 +81,35 @@ function UserDashboard() {
     setLoading(false);
 
     // Polling for real-time updates
+    // Initialize socket connection for real-time events
+    try {
+      const socketUrl = process.env.REACT_APP_SOCKET_URL || (process.env.REACT_APP_API_URL || 'http://localhost:5000');
+      socketRef.current = socketIOClient(socketUrl, { transports: ['websocket'] });
+      socketRef.current.on('connect', () => {
+        socketRef.current.emit('join', parsedUser.id);
+      });
+
+      socketRef.current.on('new_message', (payload) => {
+        // Payload: { message, from }
+        if (!payload || !payload.message) return;
+        const m = payload.message;
+        // If message involves selected user, append to messages
+        const otherId = selectedUser?.id;
+        if (otherId && (m.sender_id === otherId || m.receiver_id === otherId)) {
+          setMessages(prev => [...prev, m]);
+          scrollToBottom();
+        }
+        // Refresh conversations and notifications
+        fetchConversations(parsedUser.id);
+        fetchNotifications(parsedUser.id);
+      });
+
+      socketRef.current.on('new_notification', () => fetchNotifications(parsedUser.id));
+    } catch (err) {
+      console.warn('Socket init failed', err.message);
+    }
+
+    // Backwards-compatible polling (fallback)
     const interval = setInterval(() => {
       if (selectedUser && parsedUser.id) {
         fetchMessages(parsedUser.id, selectedUser.id);
@@ -86,6 +120,17 @@ function UserDashboard() {
 
     return () => clearInterval(interval);
   }, [navigate, selectedUser]);
+
+  useEffect(() => {
+    return () => {
+      try {
+        if (socketRef.current) {
+          socketRef.current.emit('leave', user?.id);
+          socketRef.current.disconnect();
+        }
+      } catch (e) {}
+    };
+  }, [user]);
 
   const fetchUserProfile = async (email) => {
     try {
@@ -202,7 +247,7 @@ function UserDashboard() {
 
   const handleSendMessage = async (e) => {
     e.preventDefault();
-    if (!messageInput.trim() || !selectedUser) return;
+    if ((!messageInput.trim() && !messageFile) || !selectedUser) return;
 
     if (!isPremium && conversationCount >= 5) {
       setShowPremiumWarning(true);
@@ -211,14 +256,30 @@ function UserDashboard() {
 
     try {
       const apiUrl = process.env.REACT_APP_API_URL || 'http://localhost:5000';
-      const res = await axios.post(`${apiUrl}/api/user-message/send`, {
-        senderId: user.id,
-        receiverId: selectedUser.id,
-        message: messageInput.trim(),
-      });
+
+      let res;
+      if (messageFile) {
+        const form = new FormData();
+        form.append('senderId', user.id);
+        form.append('receiverId', selectedUser.id);
+        form.append('message', messageInput.trim());
+        form.append('attachment', messageFile);
+
+        res = await axios.post(`${apiUrl}/api/user-message/send`, form, {
+          headers: { 'Content-Type': 'multipart/form-data' },
+        });
+      } else {
+        res = await axios.post(`${apiUrl}/api/user-message/send`, {
+          senderId: user.id,
+          receiverId: selectedUser.id,
+          message: messageInput.trim(),
+        });
+      }
 
       if (res.data.success) {
         setMessageInput('');
+        setMessageFile(null);
+        if (messageFileRef.current) messageFileRef.current.value = '';
         await fetchMessages(user.id, selectedUser.id);
         await fetchConversations(user.id);
         showToast('Message sent!', 'success');
@@ -240,6 +301,18 @@ function UserDashboard() {
     setMessageLoading(true);
     fetchMessages(user.id, person.id);
     setTimeout(() => setMessageLoading(false), 400);
+  };
+
+  const handleMessageFileChange = (e) => {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    // Basic size/type checks (15MB limit)
+    if (f.size > 15 * 1024 * 1024) {
+      showToast('File too large (max 15MB)', 'error');
+      e.target.value = '';
+      return;
+    }
+    setMessageFile(f);
   };
 
   const handleResumeUpload = async (e) => {
@@ -652,10 +725,8 @@ function UserDashboard() {
                         </div>
                         <div className="resume-actions flex space-x-3">
                           <motion.a
-                            href={resume.minio_url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="btn-view px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+                            onClick={() => setResumeModalUrl(resume.minio_url)}
+                            className="btn-view px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 inline-flex items-center justify-center"
                             whileHover={{ scale: 1.05 }}
                             whileTap={{ scale: 0.95 }}
                           >
@@ -852,6 +923,23 @@ function UserDashboard() {
                       </div>
                     )}
                   </div>
+                  <div className="browse-small p-4 border-t">
+                    <h4 className="text-sm font-semibold mb-3">Browse Professionals</h4>
+                    <div className="space-y-2 max-h-44 overflow-y-auto">
+                      {allUsers.slice(0, 10).map(u => (
+                        <div key={u.id} className="flex items-center justify-between">
+                          <div className="flex items-center gap-3">
+                            <img src={u.profile_image_url || 'https://via.placeholder.com/40'} alt={u.fullname} className="w-8 h-8 rounded-full object-cover" />
+                            <div className="text-sm">
+                              <div className="font-medium truncate" style={{maxWidth:120}}>{u.fullname}</div>
+                              <div className="text-xs text-gray-500 truncate" style={{maxWidth:120}}>{u.company_name || ''}</div>
+                            </div>
+                          </div>
+                          <button onClick={() => handleSelectUser(u)} className="px-3 py-1 bg-blue-600 text-white text-xs rounded">Message</button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
                 </div>
 
                 {/* Chat Area */}
@@ -894,6 +982,23 @@ function UserDashboard() {
                                 }`}
                               >
                                 <p>{msg.message}</p>
+                                {msg.attachments && msg.attachments.length > 0 && (
+                                  <div className="mt-2 attachments space-y-2">
+                                    {msg.attachments.map((att) => (
+                                      <div key={att.id} className="attachment">
+                                        {att.file_type?.startsWith('image/') ? (
+                                          <img src={att.minio_url} alt={att.file_name} className="w-48 rounded" />
+                                        ) : att.file_type?.startsWith('video/') ? (
+                                          <video controls src={att.minio_url} className="w-64 rounded" />
+                                        ) : (
+                                          <a href={att.minio_url} target="_blank" rel="noreferrer" className="text-blue-600 underline">
+                                            {att.file_name}
+                                          </a>
+                                        )}
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
                                 <span className="text-xs opacity-70 mt-1 block">
                                   {new Date(msg.created_at).toLocaleTimeString([], {
                                     hour: '2-digit',
@@ -929,7 +1034,7 @@ function UserDashboard() {
                       )}
 
                       <form
-                        className="message-input-form p-6 border-t border-gray-200 bg-white flex space-x-4"
+                        className="message-input-form p-6 border-t border-gray-200 bg-white flex space-x-4 items-center"
                         onSubmit={handleSendMessage}
                       >
                         <input
@@ -940,9 +1045,12 @@ function UserDashboard() {
                           disabled={showPremiumWarning || !selectedUser}
                           className="flex-1 px-6 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:opacity-50"
                         />
+                        <input ref={messageFileRef} type="file" style={{ display: 'none' }} onChange={handleMessageFileChange} accept="image/*,video/*,.pdf,.doc,.docx" />
+                        <button type="button" className="px-3 py-2 border rounded" onClick={() => messageFileRef.current?.click()} title="Attach file">📎</button>
+                        {messageFile && <span className="text-sm text-gray-600">{messageFile.name}</span>}
                         <motion.button
                           type="submit"
-                          disabled={!messageInput.trim() || showPremiumWarning || !selectedUser}
+                          disabled={(!messageInput.trim() && !messageFile) || showPremiumWarning || !selectedUser}
                           className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
                           whileHover={{ scale: 1.05 }}
                           whileTap={{ scale: 0.95 }}
@@ -1015,8 +1123,20 @@ function UserDashboard() {
           )}
         </div>
       </main>
+      {resumeModalUrl && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center">
+          <div className="bg-white rounded-lg w-[90%] h-[90%] overflow-hidden">
+            <div className="p-3 border-b flex justify-end">
+              <button onClick={() => setResumeModalUrl(null)} className="px-3 py-1 bg-red-600 text-white rounded">Close</button>
+            </div>
+            <iframe src={resumeModalUrl} title="Resume" className="w-full h-full border-0" />
+          </div>
+        </div>
+      )}
     </motion.div>
   );
+}
+
 }
 
 export default UserDashboard;

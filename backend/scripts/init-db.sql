@@ -141,3 +141,18 @@ CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id);
 CREATE INDEX IF NOT EXISTS idx_transactions_type ON transactions(type);
 CREATE INDEX IF NOT EXISTS idx_email_logs_user ON email_logs(user_id);
 CREATE INDEX IF NOT EXISTS idx_email_logs_created ON email_logs(created_at);
+
+-- Message Attachments (images, videos, resumes sent in chats)
+CREATE TABLE IF NOT EXISTS message_attachments (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  message_id UUID NOT NULL REFERENCES user_messages(id) ON DELETE CASCADE,
+  uploader_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  file_name TEXT NOT NULL,
+  file_type TEXT,
+  minio_url TEXT NOT NULL,
+  file_size BIGINT,
+  created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_message_attachments_message ON message_attachments(message_id);
+CREATE INDEX IF NOT EXISTS idx_message_attachments_uploader ON message_attachments(uploader_id);

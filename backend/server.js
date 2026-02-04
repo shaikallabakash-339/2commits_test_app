@@ -18,6 +18,8 @@ require("dotenv").config()
 
 const app = express()
 const PORT = process.env.PORT || 5000;
+const http = require('http');
+const socketHelper = require('./socket');
 
 console.log('[v0] Starting Skill Connect Backend Server...');
 console.log('[v0] Node environment:', process.env.NODE_ENV || 'development');
@@ -41,7 +43,8 @@ app.use(express.json());
 app.use(fileUpload({
   createParentPath: true,
   limits: { 
-    fileSize: 2 * 1024 * 1024 // 2MB max file size
+    // Increase limits to allow attachments up to 10MB
+    fileSize: 10 * 1024 * 1024
   },
   useTempFiles: true,
   tempFileDir: tempDir // Use /tmp directory for serverless compatibility
@@ -97,6 +100,16 @@ app.get('/api/ready', async (req, res) => {
   }
 });
 
-app.listen(PORT, () => {
+const server = http.createServer(app);
+
+// Initialize Socket.IO
+try {
+  socketHelper.init(server);
+  console.log('[v0] Socket.IO initialized');
+} catch (err) {
+  console.warn('[v0] Socket.IO init failed:', err.message);
+}
+
+server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });

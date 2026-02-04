@@ -5,6 +5,7 @@
 const express = require('express');
 const router = express.Router();
 const { pool } = require('../config/database');
+const socketHelper = require('../socket');
 const { sendEmail, sendEmailByStatus } = require('../utils/sendpulseService');
 const { sanitizeString, sanitizeEmail } = require('../utils/validation');
 
@@ -156,15 +157,18 @@ router.get('/message-stats', async (req, res) => {
  * USER-TO-USER MESSAGE ROUTES - Real-time chat
  */
 
-// Send message to another user
+// Send message to another user (supports optional file attachment via multipart/form-data)
 router.post('/user-message/send', async (req, res) => {
-  const { senderId, receiverId, message } = req.body;
+  // support both JSON and multipart
+  const senderId = req.body?.senderId || req.body?.sender_id;
+  const receiverId = req.body?.receiverId || req.body?.receiver_id;
+  const messageText = req.body?.message || '';
 
   try {
-    if (!senderId || !receiverId || !message) {
+    if (!senderId || !receiverId || (!messageText && !req.files?.attachment)) {
       return res.status(400).json({
         success: false,
-        message: 'Sender, receiver, and message are required'
+        message: 'Sender, receiver, and message or attachment are required'
       });
     }
 
@@ -205,13 +209,48 @@ router.post('/user-message/send', async (req, res) => {
       }
     }
 
-    // Insert message
+    // Insert message (message can be empty if attachment present)
     const messageQuery = `
       INSERT INTO user_messages (sender_id, receiver_id, message, is_read)
       VALUES ($1, $2, $3, false)
-      RETURNING id, created_at
+      RETURNING *
     `;
-    const messageResult = await pool.query(messageQuery, [senderId, receiverId, sanitizeString(message)]);
+    const messageResult = await pool.query(messageQuery, [senderId, receiverId, sanitizeString(messageText)]);
+
+    const createdMessage = messageResult.rows[0];
+
+    // If there's an attachment, upload to storage and save metadata
+    if (req.files && req.files.attachment) {
+      try {
+        const attachment = req.files.attachment;
+        // Accept images, videos, pdf/doc/docx
+        const allowed = [
+          'image/jpeg','image/png','image/gif','image/webp',
+          'video/mp4','video/quicktime','application/pdf',
+          'application/msword','application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+        ];
+        if (!allowed.includes(attachment.mimetype)) {
+          // continue but don't save attachment
+          console.warn('[v0] Attachment type not allowed:', attachment.mimetype);
+        } else if (attachment.size > 15 * 1024 * 1024) {
+          return res.status(400).json({ success: false, message: 'Attachment exceeds 15MB limit' });
+        } else {
+          const { uploadFile } = require('../utils/minio');
+          const up = await uploadFile(attachment.tempFilePath, `msg-${Date.now()}-${attachment.name}`, attachment.mimetype);
+          if (up.success) {
+            const attachQuery = `
+              INSERT INTO message_attachments (message_id, uploader_id, file_name, file_type, minio_url, file_size)
+              VALUES ($1, $2, $3, $4, $5, $6)
+              RETURNING id, file_name, file_type, minio_url, file_size, created_at
+            `;
+            const attachResult = await pool.query(attachQuery, [createdMessage.id, senderId, attachment.name, attachment.mimetype, up.url, attachment.size]);
+            createdMessage.attachments = [attachResult.rows[0]];
+          }
+        }
+      } catch (attErr) {
+        console.warn('[v0] Attachment processing failed:', attErr.message);
+      }
+    }
 
     // Update or create conversation
     const conversationQuery = `
@@ -252,11 +291,22 @@ router.post('/user-message/send', async (req, res) => {
       ).catch(err => console.error('[v0] Email notification failed:', err.message));
     }
 
+      // Emit real-time events via Socket.IO
+      try {
+        const io = socketHelper.getIo();
+        if (io) {
+          const createdMessage = messageResult.rows[0];
+          io.to(String(receiverId)).emit('new_message', { message: createdMessage, from: senderId });
+          io.to(String(receiverId)).emit('new_notification', { title: 'New Message', message: `${senderName} sent you a message` });
+        }
+      } catch (err) {
+        console.warn('[v0] Real-time emit failed:', err.message);
+      }
+
     res.status(201).json({
       success: true,
       message: 'Message sent successfully',
-      messageId: messageResult.rows[0].id,
-      createdAt: messageResult.rows[0].created_at
+      message: messageResult.rows[0]
     });
   } catch (err) {
     console.error('[v0] Error sending user message:', err);
@@ -291,9 +341,24 @@ router.get('/user-message/:senderId/:receiverId', async (req, res) => {
     `;
     await pool.query(updateQuery, [senderId, receiverId]);
 
+    // Fetch attachments for these messages
+    const messageIds = result.rows.map(r => r.id);
+    let attachments = [];
+    if (messageIds.length > 0) {
+      const attachQuery = `SELECT id, message_id, file_name, file_type, minio_url, file_size, created_at FROM message_attachments WHERE message_id = ANY($1)`;
+      const attachRes = await pool.query(attachQuery, [messageIds]);
+      attachments = attachRes.rows;
+    }
+
+    // Map attachments into messages
+    const messagesWithAttachments = result.rows.map(m => ({
+      ...m,
+      attachments: attachments.filter(a => a.message_id === m.id) || []
+    }));
+
     res.status(200).json({
       success: true,
-      messages: result.rows
+      messages: messagesWithAttachments
     });
   } catch (err) {
     console.error('[v0] Error fetching messages:', err);
