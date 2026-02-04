@@ -156,3 +156,43 @@ CREATE TABLE IF NOT EXISTS message_attachments (
 
 CREATE INDEX IF NOT EXISTS idx_message_attachments_message ON message_attachments(message_id);
 CREATE INDEX IF NOT EXISTS idx_message_attachments_uploader ON message_attachments(uploader_id);
+
+-- User Experiences (Track user work experience - can add multiple)
+CREATE TABLE IF NOT EXISTS user_experiences (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  job_title TEXT NOT NULL,
+  company_name TEXT NOT NULL,
+  start_date DATE,
+  end_date DATE,
+  is_current BOOLEAN DEFAULT false,
+  description TEXT,
+  created_at TIMESTAMP DEFAULT NOW(),
+  updated_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_experiences_user ON user_experiences(user_id);
+
+-- User Status (Track online/offline status in real-time)
+CREATE TABLE IF NOT EXISTS user_status (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  user_id UUID UNIQUE NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  is_online BOOLEAN DEFAULT false,
+  last_seen TIMESTAMP DEFAULT NOW(),
+  updated_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_status_user ON user_status(user_id);
+CREATE INDEX IF NOT EXISTS idx_user_status_online ON user_status(is_online);
+
+-- Message Read Receipts (Track read status with timestamps)
+CREATE TABLE IF NOT EXISTS message_read_receipts (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  message_id UUID NOT NULL REFERENCES user_messages(id) ON DELETE CASCADE,
+  reader_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  read_at TIMESTAMP DEFAULT NOW(),
+  UNIQUE(message_id, reader_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_message_read_receipts_message ON message_read_receipts(message_id);
+CREATE INDEX IF NOT EXISTS idx_message_read_receipts_reader ON message_read_receipts(reader_id);

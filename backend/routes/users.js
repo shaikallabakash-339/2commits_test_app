@@ -475,4 +475,65 @@ router.get('/all-users', async (req, res) => {
   }
 });
 
+// Upload profile photo to MinIO
+router.post('/upload-profile-photo', async (req, res) => {
+  try {
+    const { userId } = req.body;
+    const photoFile = req.files?.file;
+
+    if (!userId) {
+      return res.status(400).json({ success: false, message: 'User ID is required' });
+    }
+
+    if (!photoFile) {
+      return res.status(400).json({ success: false, message: 'Photo file is required' });
+    }
+
+    // Validate file type
+    const validTypes = ['image/jpeg', 'image/png', 'image/jpg'];
+    if (!validTypes.includes(photoFile.mimetype)) {
+      return res.status(400).json({ success: false, message: 'Only JPG and PNG images are allowed' });
+    }
+
+    // Check file size (max 5MB)
+    if (photoFile.size > 5 * 1024 * 1024) {
+      return res.status(400).json({ success: false, message: 'File size must be less than 5MB' });
+    }
+
+    // Upload to MinIO with unique filename
+    const timestamp = Date.now();
+    const filename = `profile-photos/${userId}-${timestamp}-${photoFile.name}`;
+    const uploadUrl = await uploadBuffer(filename, photoFile.data, photoFile.mimetype);
+
+    // Update user's profile_image_url in database
+    const updateQuery = `
+      UPDATE users
+      SET profile_image_url = $1, updated_at = NOW()
+      WHERE id = $2
+      RETURNING id, profile_image_url, email, fullname
+    `;
+
+    const result = await pool.query(updateQuery, [uploadUrl, userId]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+
+    console.log('[v0] Profile photo uploaded successfully for user:', userId);
+    res.status(200).json({
+      success: true,
+      message: 'Profile photo uploaded successfully',
+      imageUrl: uploadUrl,
+      user: result.rows[0]
+    });
+  } catch (err) {
+    console.error('[v0] Error uploading profile photo:', err);
+    res.status(500).json({
+      success: false,
+      message: 'Error uploading profile photo',
+      error: process.env.NODE_ENV === 'development' ? err.message : 'Internal server error'
+    });
+  }
+});
+
 module.exports = router;

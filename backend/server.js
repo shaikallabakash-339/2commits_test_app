@@ -13,6 +13,8 @@ const messageRoutes = require("./routes/messages")
 const uploadRoutes = require("./routes/admin")
 const donationRoutes = require("./routes/donations")
 const subscriptionRoutes = require("./routes/subscriptions")
+const experienceRoutes = require("./routes/experiences")
+const statusRoutes = require("./routes/status")
 const { pool, testConnection } = require("./config/database")
 require("dotenv").config()
 
@@ -62,6 +64,8 @@ app.use("/api", messageRoutes)
 app.use("/api", uploadRoutes)
 app.use("/api", donationRoutes)
 app.use("/api/subscriptions", subscriptionRoutes)
+app.use("/api/experiences", experienceRoutes)
+app.use("/api/status", statusRoutes)
 
 // Enhanced Health Check with Database Status
 app.get('/health', async (req, res) => {

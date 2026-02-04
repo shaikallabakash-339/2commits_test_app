@@ -378,9 +378,9 @@ router.get('/conversations/:userId', async (req, res) => {
     const query = `
       SELECT 
         c.id,
-        c.contact_id,
-        u.fullname,
-        u.profile_image_url,
+        c.contact_id as conversation_partner_id,
+        u.fullname as conversation_partner_name,
+        u.profile_image_url as partner_profile_image_url,
         u.company_name,
         c.last_message,
         c.last_message_time,

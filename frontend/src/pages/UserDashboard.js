@@ -9,7 +9,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { io as socketIOClient } from 'socket.io-client';
 import {
   Home, MessageSquare, Bell, LogOut, Search, Send, Upload, FileText, Trash2,
-  ChevronDown, Settings, User, Users, Zap, Lock, CreditCard
+  ChevronDown, Settings, User, Users, Zap, Lock, CreditCard, Briefcase, Plus
 } from 'lucide-react';
 import { showToast } from '../utils/toast';
 import '../styles/user-dashboard.css';
@@ -26,7 +26,7 @@ function UserDashboard() {
   const [isUpdatingProfile, setIsUpdatingProfile] = useState(false); // Fixed: this was declared but not used properly
 
   // UI State
-  const [activeTab, setActiveTab] = useState('home');
+  const [activeTab, setActiveTab] = useState('profile');
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
 
   // Home Tab State
@@ -59,6 +59,24 @@ function UserDashboard() {
   const [resumeUploading, setResumeUploading] = useState(false);
   const [resumeModalUrl, setResumeModalUrl] = useState(null);
 
+  // Profile Tab State (new)
+  const [userBio, setUserBio] = useState('');
+  const [experiences, setExperiences] = useState([]);
+  const [showExperienceForm, setShowExperienceForm] = useState(false);
+  const [experienceForm, setExperienceForm] = useState({
+    jobTitle: '',
+    companyName: '',
+    startDate: '',
+    endDate: '',
+    isCurrent: false,
+    description: ''
+  });
+  const [profilePhotoUploading, setProfilePhotoUploading] = useState(false);
+
+  // Status Tracking State
+  const [userStatuses, setUserStatuses] = useState({});
+  const [currentUserStatus, setCurrentUserStatus] = useState('offline');
+
   // Initialize
   useEffect(() => {
     const userData = localStorage.getItem('user');
@@ -70,6 +88,7 @@ function UserDashboard() {
     const parsedUser = JSON.parse(userData);
     setUser(parsedUser);
     setUpdatedProfile(parsedUser);
+    setUserBio(parsedUser.bio || '');
     setIsPremium(parsedUser.is_premium || false);
 
     fetchUserProfile(parsedUser.email);
@@ -77,6 +96,10 @@ function UserDashboard() {
     fetchConversations(parsedUser.id);
     fetchNotifications(parsedUser.id);
     fetchResumes(parsedUser.email);
+    fetchExperiences(parsedUser.id);
+
+    // Update user status to online
+    updateUserStatus(true);
 
     setLoading(false);
 
@@ -187,15 +210,8 @@ function UserDashboard() {
       const apiUrl = process.env.REACT_APP_API_URL || 'http://localhost:5000';
       const res = await axios.get(`${apiUrl}/api/conversations/${userId}`);
       if (res.data.success) {
-        const safeConv = (res.data.conversations || []).map(conv => ({
-          ...conv,
-          conversation_partner_name: conv.conversation_partner_name || 'Unknown User',
-          partner_profile_image_url: conv.partner_profile_image_url || 'https://via.placeholder.com/40?text=U',
-          last_message: conv.last_message || '',
-          company_name: conv.company_name || '',
-        }));
-        setConversations(safeConv);
-        setConversationCount(safeConv.length);
+        setConversations(res.data.conversations || []);
+        setConversationCount(res.data.conversations?.length || 0);
       }
     } catch (err) {
       console.error('Conversations fetch failed:', err);
@@ -407,6 +423,141 @@ function UserDashboard() {
     navigate('/login');
   };
 
+  // Fetch experiences for current user
+  const fetchExperiences = async (userId) => {
+    try {
+      const apiUrl = process.env.REACT_APP_API_URL || 'http://localhost:5000';
+      const res = await axios.get(`${apiUrl}/api/experiences/user/${userId}`);
+      if (res.data.success) {
+        setExperiences(res.data.experiences || []);
+      }
+    } catch (err) {
+      console.error('Fetch experiences error:', err);
+    }
+  };
+
+  // Add new experience
+  const handleAddExperience = async () => {
+    if (!experienceForm.jobTitle || !experienceForm.companyName) {
+      showToast('Job title and company are required', 'error');
+      return;
+    }
+    
+    try {
+      const apiUrl = process.env.REACT_APP_API_URL || 'http://localhost:5000';
+      const res = await axios.post(`${apiUrl}/api/experiences`, {
+        userId: user.id,
+        jobTitle: experienceForm.jobTitle,
+        companyName: experienceForm.companyName,
+        startDate: experienceForm.startDate || null,
+        endDate: experienceForm.endDate || null,
+        isCurrent: experienceForm.isCurrent,
+        description: experienceForm.description
+      });
+      
+      if (res.data.success) {
+        showToast('Experience added successfully!', 'success');
+        setExperiences([...experiences, res.data.experience]);
+        setShowExperienceForm(false);
+        setExperienceForm({
+          jobTitle: '',
+          companyName: '',
+          startDate: '',
+          endDate: '',
+          isCurrent: false,
+          description: ''
+        });
+      }
+    } catch (err) {
+      console.error('Add experience error:', err);
+      showToast('Failed to add experience', 'error');
+    }
+  };
+
+  // Delete experience
+  const handleDeleteExperience = async (experienceId) => {
+    if (!window.confirm('Delete this experience?')) return;
+    
+    try {
+      const apiUrl = process.env.REACT_APP_API_URL || 'http://localhost:5000';
+      const res = await axios.delete(`${apiUrl}/api/experiences/${experienceId}`);
+      
+      if (res.data.success) {
+        showToast('Experience deleted successfully!', 'success');
+        setExperiences(experiences.filter(exp => exp.id !== experienceId));
+      }
+    } catch (err) {
+      console.error('Delete experience error:', err);
+      showToast('Failed to delete experience', 'error');
+    }
+  };
+
+  // Update user bio
+  const handleUpdateBio = async () => {
+    try {
+      const apiUrl = process.env.REACT_APP_API_URL || 'http://localhost:5000';
+      const res = await axios.put(`${apiUrl}/api/user/${user.id}/update`, {
+        bio: userBio
+      });
+      
+      if (res.data.success) {
+        showToast('Bio updated successfully!', 'success');
+        setUser({ ...user, bio: userBio });
+      }
+    } catch (err) {
+      console.error('Update bio error:', err);
+      showToast('Failed to update bio', 'error');
+    }
+  };
+
+  // Upload profile photo
+  const handleProfilePhotoUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    
+    if (!['image/jpeg', 'image/png', 'image/jpg'].includes(file.type)) {
+      showToast('Only JPG and PNG images are allowed', 'error');
+      return;
+    }
+    
+    setProfilePhotoUploading(true);
+    
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('userId', user.id);
+      
+      const apiUrl = process.env.REACT_APP_API_URL || 'http://localhost:5000';
+      const res = await axios.post(`${apiUrl}/api/upload-profile-photo`, formData, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+      });
+      
+      if (res.data.success) {
+        setUser({ ...user, profile_image_url: res.data.imageUrl });
+        showToast('Profile photo updated successfully!', 'success');
+      }
+    } catch (err) {
+      console.error('Profile photo upload error:', err);
+      showToast('Failed to upload profile photo', 'error');
+    } finally {
+      setProfilePhotoUploading(false);
+    }
+  };
+
+  // Update online status
+  const updateUserStatus = async (isOnline) => {
+    try {
+      const apiUrl = process.env.REACT_APP_API_URL || 'http://localhost:5000';
+      await axios.post(`${apiUrl}/api/status/update`, {
+        userId: user.id,
+        isOnline
+      });
+      setCurrentUserStatus(isOnline ? 'online' : 'offline');
+    } catch (err) {
+      console.error('Update status error:', err);
+    }
+  };
+
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
@@ -499,11 +650,11 @@ function UserDashboard() {
         <nav className="dashboard-navbar bg-white shadow-sm">
           <div className="navbar-center flex space-x-8">
             <button
-              className={`nav-btn flex items-center space-x-2 px-4 py-2 rounded-lg ${activeTab === 'home' ? 'bg-blue-100 text-blue-700' : 'text-gray-600 hover:bg-gray-100'}`}
-              onClick={() => setActiveTab('home')}
+              className={`nav-btn flex items-center space-x-2 px-4 py-2 rounded-lg ${activeTab === 'profile' ? 'bg-blue-100 text-blue-700' : 'text-gray-600 hover:bg-gray-100'}`}
+              onClick={() => setActiveTab('profile')}
             >
               <Home size={20} />
-              <span>Home</span>
+              <span>Profile</span>
             </button>
             <button
               className={`nav-btn flex items-center space-x-2 px-4 py-2 rounded-lg ${activeTab === 'messages' ? 'bg-blue-100 text-blue-700' : 'text-gray-600 hover:bg-gray-100'}`}
@@ -515,6 +666,15 @@ function UserDashboard() {
                 <span className="badge bg-blue-600 text-white text-xs px-2 py-1 rounded-full">{conversationCount}</span>
               )}
             </button>
+            {user?.is_admin && (
+              <button
+                className={`nav-btn flex items-center space-x-2 px-4 py-2 rounded-lg ${activeTab === 'admin-messages' ? 'bg-blue-100 text-blue-700' : 'text-gray-600 hover:bg-gray-100'}`}
+                onClick={() => setActiveTab('admin-messages')}
+              >
+                <MessageSquare size={20} />
+                <span>Admin Messages</span>
+              </button>
+            )}
             <button
               className={`nav-btn flex items-center space-x-2 px-4 py-2 rounded-lg ${activeTab === 'notifications' ? 'bg-blue-100 text-blue-700' : 'text-gray-600 hover:bg-gray-100'}`}
               onClick={() => setActiveTab('notifications')}
@@ -588,95 +748,148 @@ function UserDashboard() {
 
         {/* Tab Content */}
         <div className="tab-content">
-          {/* HOME TAB */}
-          {activeTab === 'home' && (
-            <motion.div className="home-section space-y-8">
-              {/* Profile Update Form */}
-              {profileUpdateMode && (
-                <motion.div
-                  className="profile-update-card bg-white p-8 rounded-xl shadow-lg"
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
+          {/* PROFILE TAB */}
+          {activeTab === 'profile' && (
+            <motion.div className="profile-section space-y-8">
+              {/* Profile Photo Upload */}
+              <motion.div
+                className="profile-photo-section bg-white p-8 rounded-xl shadow-lg"
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+              >
+                <h3 className="text-2xl font-bold mb-6">Profile Photo</h3>
+                <div className="flex items-center space-x-8">
+                  <div className="profile-photo-display w-32 h-32 rounded-full overflow-hidden border-4 border-blue-600 bg-gray-100">
+                    <img 
+                      src={user?.profile_image_url || 'https://via.placeholder.com/128?text=U'} 
+                      alt="Profile" 
+                      className="w-full h-full object-cover"
+                    />
+                  </div>
+                  <motion.button
+                    className="upload-photo-btn px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center"
+                    onClick={() => document.getElementById('profile-photo-input')?.click()}
+                    disabled={profilePhotoUploading}
+                    whileHover={{ scale: 1.02 }}
+                    whileTap={{ scale: 0.98 }}
+                  >
+                    <Upload size={18} className="mr-2" />
+                    {profilePhotoUploading ? 'Uploading...' : 'Change Photo'}
+                  </motion.button>
+                  <input
+                    id="profile-photo-input"
+                    type="file"
+                    accept="image/jpeg,image/png,image/jpg"
+                    onChange={handleProfilePhotoUpload}
+                    style={{ display: 'none' }}
+                  />
+                </div>
+              </motion.div>
+
+              {/* Profile Information Form */}
+              <motion.div
+                className="profile-info-section bg-white p-8 rounded-xl shadow-lg"
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+              >
+                <h3 className="text-2xl font-bold mb-6">Basic Information</h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div className="form-group">
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Full Name</label>
+                    <input
+                      type="text"
+                      value={updatedProfile.fullname || ''}
+                      onChange={(e) => setUpdatedProfile({ ...updatedProfile, fullname: e.target.value })}
+                      className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                      placeholder="Your full name"
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Email</label>
+                    <input
+                      type="email"
+                      value={updatedProfile.email || ''}
+                      disabled
+                      className="w-full px-4 py-3 border border-gray-300 rounded-lg bg-gray-50 text-gray-500 cursor-not-allowed"
+                      placeholder="your@email.com"
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Company Name</label>
+                    <input
+                      type="text"
+                      value={updatedProfile.company_name || ''}
+                      onChange={(e) => setUpdatedProfile({ ...updatedProfile, company_name: e.target.value })}
+                      className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                      placeholder="Your company"
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label className="block text-sm font-medium text-gray-700 mb-2">City</label>
+                    <input
+                      type="text"
+                      value={updatedProfile.city || ''}
+                      onChange={(e) => setUpdatedProfile({ ...updatedProfile, city: e.target.value })}
+                      className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                      placeholder="Your city"
+                    />
+                  </div>
+                  <div className="form-group md:col-span-2">
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Current Status</label>
+                    <select
+                      value={updatedProfile.status || 'pursuing'}
+                      onChange={(e) => setUpdatedProfile({ ...updatedProfile, status: e.target.value })}
+                      className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    >
+                      <option value="pursuing">Pursuing</option>
+                      <option value="graduated">Graduated</option>
+                      <option value="employed">Employed</option>
+                    </select>
+                  </div>
+                </div>
+                <motion.button
+                  className="mt-6 px-8 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                  onClick={handleUpdateProfile}
+                  disabled={isUpdatingProfile}
+                  whileHover={{ scale: 1.02 }}
+                  whileTap={{ scale: 0.98 }}
                 >
-                  <h3 className="text-2xl font-bold mb-6">Update Your Profile</h3>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    <div className="form-group">
-                      <label className="block text-sm font-medium text-gray-700 mb-2">Full Name</label>
-                      <input
-                        type="text"
-                        value={updatedProfile.fullname || ''}
-                        onChange={(e) => setUpdatedProfile({ ...updatedProfile, fullname: e.target.value })}
-                        className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                        placeholder="Your full name"
-                      />
-                    </div>
-                    <div className="form-group">
-                      <label className="block text-sm font-medium text-gray-700 mb-2">Email</label>
-                      <input
-                        type="email"
-                        value={updatedProfile.email || ''}
-                        onChange={(e) => setUpdatedProfile({ ...updatedProfile, email: e.target.value })}
-                        className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                        placeholder="your@email.com"
-                      />
-                    </div>
-                    <div className="form-group">
-                      <label className="block text-sm font-medium text-gray-700 mb-2">Company Name</label>
-                      <input
-                        type="text"
-                        value={updatedProfile.company_name || ''}
-                        onChange={(e) => setUpdatedProfile({ ...updatedProfile, company_name: e.target.value })}
-                        className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                        placeholder="Your company"
-                      />
-                    </div>
-                    <div className="form-group">
-                      <label className="block text-sm font-medium text-gray-700 mb-2">City</label>
-                      <input
-                        type="text"
-                        value={updatedProfile.city || ''}
-                        onChange={(e) => setUpdatedProfile({ ...updatedProfile, city: e.target.value })}
-                        className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                        placeholder="Your city"
-                      />
-                    </div>
-                    <div className="form-group md:col-span-2">
-                      <label className="block text-sm font-medium text-gray-700 mb-2">Status</label>
-                      <select
-                        value={updatedProfile.status || 'pursuing'}
-                        onChange={(e) => setUpdatedProfile({ ...updatedProfile, status: e.target.value })}
-                        className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                      >
-                        <option value="pursuing">Pursuing</option>
-                        <option value="graduated">Graduated</option>
-                        <option value="employed">Employed</option>
-                      </select>
-                    </div>
-                  </div>
+                  {isUpdatingProfile ? 'Saving...' : 'Save Changes'}
+                </motion.button>
+              </motion.div>
 
-                  <div className="form-actions flex justify-end space-x-4 mt-8">
-                    <motion.button
-                      className="btn-secondary px-6 py-3 border border-gray-300 rounded-lg hover:bg-gray-50"
-                      onClick={() => setProfileUpdateMode(false)}
-                      whileHover={{ scale: 1.02 }}
-                      whileTap={{ scale: 0.98 }}
-                    >
-                      Cancel
-                    </motion.button>
-                    <motion.button
-                      className="btn-primary px-8 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
-                      onClick={handleUpdateProfile}
-                      disabled={isUpdatingProfile} // ← Fixed: now correctly uses the state variable
-                      whileHover={{ scale: 1.02 }}
-                      whileTap={{ scale: 0.98 }}
-                    >
-                      {isUpdatingProfile ? 'Saving...' : 'Save Changes'} {/* ← Fixed: now shows loading state */}
-                    </motion.button>
-                  </div>
-                </motion.div>
-              )}
+              {/* Bio Section */}
+              <motion.div
+                className="bio-section bg-white p-8 rounded-xl shadow-lg"
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+              >
+                <h3 className="text-2xl font-bold mb-6 flex items-center">
+                  <FileText size={24} className="mr-3 text-blue-600" />
+                  About You
+                </h3>
+                <div className="form-group">
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Professional Bio</label>
+                  <textarea
+                    value={userBio}
+                    onChange={(e) => setUserBio(e.target.value)}
+                    placeholder="Write a few lines about yourself, your skills, and what you're passionate about..."
+                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    rows={5}
+                  />
+                  <p className="text-sm text-gray-500 mt-2">{userBio.length}/500 characters</p>
+                </div>
+                <motion.button
+                  className="mt-4 px-8 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+                  onClick={handleUpdateBio}
+                  whileHover={{ scale: 1.02 }}
+                  whileTap={{ scale: 0.98 }}
+                >
+                  Save Bio
+                </motion.button>
+              </motion.div>
 
-              {/* Resume Section */}
+              {/* Resumes Section */}
               <motion.div
                 className="resume-section bg-white p-8 rounded-xl shadow-lg"
                 initial={{ opacity: 0, y: 20 }}
@@ -728,7 +941,7 @@ function UserDashboard() {
                         <div className="resume-actions flex space-x-3">
                           <motion.a
                             onClick={() => setResumeModalUrl(resume.minio_url)}
-                            className="btn-view px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 inline-flex items-center justify-center"
+                            className="btn-view px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 inline-flex items-center justify-center cursor-pointer"
                             whileHover={{ scale: 1.05 }}
                             whileTap={{ scale: 0.95 }}
                           >
@@ -760,94 +973,134 @@ function UserDashboard() {
                 </div>
               </motion.div>
 
-              {/* Browse Users */}
+              {/* Experiences Section */}
               <motion.div
-                className="browse-users-section bg-white p-8 rounded-xl shadow-lg"
+                className="experiences-section bg-white p-8 rounded-xl shadow-lg"
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
               >
-                <h3 className="text-2xl font-bold mb-6 flex items-center">
-                  <Users size={24} className="mr-3 text-blue-600" />
-                  Browse Professionals
-                </h3>
-
-                <div className="search-filters flex flex-col md:flex-row gap-4 mb-8">
-                  <div className="search-container flex-1 relative">
-                    <Search size={18} className="absolute left-4 top-1/2 transform -translate-y-1/2 text-gray-400" />
-                    <input
-                      type="text"
-                      placeholder="Search by name or company..."
-                      value={searchQuery}
-                      onChange={(e) => setSearchQuery(e.target.value)}
-                      className="w-full pl-12 pr-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                    />
-                  </div>
-
-                  <div className="filter-buttons flex space-x-3">
-                    <button
-                      className={`filter-btn px-6 py-3 rounded-lg ${userSearchType === 'name' ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-700'}`}
-                      onClick={() => setUserSearchType('name')}
-                    >
-                      By Name
-                    </button>
-                    <button
-                      className={`filter-btn px-6 py-3 rounded-lg ${userSearchType === 'company' ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-700'}`}
-                      onClick={() => setUserSearchType('company')}
-                    >
-                      By Company
-                    </button>
-                  </div>
+                <div className="flex justify-between items-center mb-6">
+                  <h3 className="text-2xl font-bold flex items-center">
+                    <Briefcase size={24} className="mr-3 text-blue-600" />
+                    Work Experience
+                  </h3>
+                  <motion.button
+                    className="add-experience-btn flex items-center px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+                    onClick={() => setShowExperienceForm(!showExperienceForm)}
+                    whileHover={{ scale: 1.02 }}
+                    whileTap={{ scale: 0.98 }}
+                  >
+                    <Plus size={18} className="mr-2" />
+                    Add Experience
+                  </motion.button>
                 </div>
 
-                <div className="users-grid grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                  {filteredUsers.length > 0 ? (
-                    filteredUsers.map((person, idx) => (
-                      <motion.div
-                        key={person.id}
-                        className="user-card bg-white border border-gray-200 rounded-xl shadow-sm hover:shadow-md transition-all duration-300 overflow-hidden"
-                        initial={{ opacity: 0, y: 20 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        transition={{ delay: idx * 0.05 }}
-                        whileHover={{ y: -5, boxShadow: '0 10px 30px rgba(0,0,0,0.1)' }}
+                {showExperienceForm && (
+                  <motion.div
+                    className="experience-form bg-gray-50 p-6 rounded-lg mb-6"
+                    initial={{ opacity: 0, height: 0 }}
+                    animate={{ opacity: 1, height: 'auto' }}
+                  >
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <input
+                        type="text"
+                        placeholder="Job Title (e.g., Senior Engineer)"
+                        value={experienceForm.jobTitle}
+                        onChange={(e) => setExperienceForm({ ...experienceForm, jobTitle: e.target.value })}
+                        className="px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                      />
+                      <input
+                        type="text"
+                        placeholder="Company Name"
+                        value={experienceForm.companyName}
+                        onChange={(e) => setExperienceForm({ ...experienceForm, companyName: e.target.value })}
+                        className="px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                      />
+                      <input
+                        type="date"
+                        placeholder="Start Date"
+                        value={experienceForm.startDate}
+                        onChange={(e) => setExperienceForm({ ...experienceForm, startDate: e.target.value })}
+                        className="px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                      />
+                      <div className="flex items-center space-x-4">
+                        <input
+                          type="date"
+                          placeholder="End Date"
+                          value={experienceForm.endDate}
+                          onChange={(e) => setExperienceForm({ ...experienceForm, endDate: e.target.value })}
+                          disabled={experienceForm.isCurrent}
+                          className="flex-1 px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 disabled:bg-gray-200"
+                        />
+                        <label className="flex items-center space-x-2">
+                          <input
+                            type="checkbox"
+                            checked={experienceForm.isCurrent}
+                            onChange={(e) => setExperienceForm({ ...experienceForm, isCurrent: e.target.checked, endDate: '' })}
+                            className="w-4 h-4"
+                          />
+                          <span className="text-sm">Current</span>
+                        </label>
+                      </div>
+                      <textarea
+                        placeholder="Description (optional)"
+                        value={experienceForm.description}
+                        onChange={(e) => setExperienceForm({ ...experienceForm, description: e.target.value })}
+                        className="md:col-span-2 px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 h-20"
+                      />
+                    </div>
+                    <div className="flex justify-end space-x-3 mt-4">
+                      <button
+                        onClick={() => setShowExperienceForm(false)}
+                        className="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-100"
                       >
-                        <div className="user-card-header p-6 pb-0">
-                          <div className="flex items-center space-x-4">
-                            <div className="user-avatar w-16 h-16 rounded-full overflow-hidden bg-gray-100">
-                              {person.profile_image_url ? (
-                                <img src={person.profile_image_url} alt={person.fullname} className="w-full h-full object-cover" />
-                              ) : (
-                                <div className="w-full h-full flex items-center justify-center text-gray-400">
-                                  <User size={32} />
-                                </div>
-                              )}
-                            </div>
-                            <div>
-                              <h4 className="font-bold text-lg">{person.fullname}</h4>
-                              <p className="text-gray-600">{person.company_name || 'No company'}</p>
-                            </div>
-                          </div>
-                          <span className={`status-badge inline-block mt-3 px-4 py-1 rounded-full text-sm ${person.status}`}>
-                            {person.status?.charAt(0).toUpperCase() + person.status?.slice(1)}
-                          </span>
-                        </div>
+                        Cancel
+                      </button>
+                      <button
+                        onClick={handleAddExperience}
+                        className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+                      >
+                        Add Experience
+                      </button>
+                    </div>
+                  </motion.div>
+                )}
 
-                        <div className="p-6 pt-4">
-                          <motion.button
-                            className="message-btn w-full bg-blue-600 text-white py-3 rounded-lg hover:bg-blue-700 transition flex items-center justify-center"
-                            onClick={() => handleSelectUser(person)}
-                            whileHover={{ scale: 1.03 }}
-                            whileTap={{ scale: 0.97 }}
+                <div className="experiences-list space-y-4">
+                  {experiences.length > 0 ? (
+                    experiences.map((exp, idx) => (
+                      <motion.div
+                        key={exp.id}
+                        className="experience-item p-4 bg-gray-50 rounded-lg hover:shadow-md transition"
+                        initial={{ opacity: 0, x: -20 }}
+                        animate={{ opacity: 1, x: 0 }}
+                        transition={{ delay: idx * 0.05 }}
+                      >
+                        <div className="flex justify-between items-start">
+                          <div className="flex-1">
+                            <h4 className="font-bold text-lg">{exp.job_title}</h4>
+                            <p className="text-gray-600">{exp.company_name}</p>
+                            <p className="text-sm text-gray-500 mt-1">
+                              {exp.start_date ? new Date(exp.start_date).toLocaleDateString('en-US', { year: 'numeric', month: 'short' }) : ''}
+                              {' '}-{' '}
+                              {exp.isCurrent ? 'Current' : exp.end_date ? new Date(exp.end_date).toLocaleDateString('en-US', { year: 'numeric', month: 'short' }) : ''}
+                            </p>
+                            {exp.description && <p className="text-gray-700 mt-2">{exp.description}</p>}
+                          </div>
+                          <button
+                            onClick={() => handleDeleteExperience(exp.id)}
+                            className="text-red-600 hover:text-red-700 p-2"
                           >
-                            <MessageSquare size={18} className="mr-2" />
-                            Send Message
-                          </motion.button>
+                            <Trash2 size={18} />
+                          </button>
                         </div>
                       </motion.div>
                     ))
                   ) : (
-                    <div className="col-span-full text-center py-12">
-                      <Users size={64} className="mx-auto text-gray-300" />
-                      <p className="mt-4 text-gray-500 text-lg">No professionals found matching your search</p>
+                    <div className="empty-state text-center py-8">
+                      <Briefcase size={48} className="mx-auto text-gray-300" />
+                      <p className="mt-3 text-gray-500">No work experience yet</p>
+                      <p className="text-sm text-gray-400 mt-1">Add your first work experience to show what you've accomplished</p>
                     </div>
                   )}
                 </div>
@@ -1091,7 +1344,15 @@ function UserDashboard() {
                       key={idx}
                       className={`notification-item p-6 rounded-xl border-l-4 ${
                         notif.is_read ? 'bg-gray-50 border-gray-300' : 'bg-blue-50 border-blue-500'
-                      }`}
+                      } cursor-pointer hover:shadow-md transition`}
+                      onClick={() => {
+                        if (!notif.is_read) {
+                          axios.put(`${process.env.REACT_APP_API_URL || 'http://localhost:5000'}/api/notifications/${notif.id}/read`);
+                        }
+                        if (notif.type === 'message') {
+                          setActiveTab('messages');
+                        }
+                      }}
                       initial={{ opacity: 0, x: -20 }}
                       animate={{ opacity: 1, x: 0 }}
                       transition={{ delay: idx * 0.05 }}
