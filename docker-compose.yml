@@ -1,0 +1,154 @@
+services:
+  # -------- POSTGRES DATABASE --------
+  postgres:
+    image: postgres:15-alpine
+    container_name: skill_connect_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_NAME:-skill_connect_db}
+      POSTGRES_USER: ${DB_USER:-admin}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-admin123}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - skill_connect_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-admin}   -d ${DB_NAME:-skill_connect_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # -------- MINIO (S3-COMPATIBLE STORAGE) --------
+  minio:
+    image: minio/minio:latest
+    container_name: skill_connect_minio
+    command: server /data --console-address ":9001"
+    restart: unless-stopped
+    environment:
+      MINIO_ROOT_USER: ${MINIO_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_PASSWORD:-minioadmin123}
+    ports:
+      - "9000:9000"   # API
+      - "9001:9001"   # Web UI
+    volumes:
+      - minio_data:/data
+    networks:
+      - skill_connect_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  # -------- MAILPIT (LOCAL EMAIL TESTING) --------
+  mailpit:
+    image: axllent/mailpit:latest
+    container_name: skill_connect_mailpit
+    restart: unless-stopped
+    ports:
+      - "1125:1025"   # SMTP
+      - "8025:8025"   # Web UI
+    networks:
+      - skill_connect_network
+    environment:
+      MP_MAX_MESSAGES: 5000
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8025/api/v1/database"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # -------- NODE BACKEND --------
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: skill_connect_backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    ports:
+      - "5000:5000"
+    environment:
+      # App Config
+      NODE_ENV: ${NODE_ENV:-development}
+      PORT: 5000
+      
+      # Database (use individual vars, not connection string)
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: ${DB_USER:-admin}
+      DB_PASSWORD: ${DB_PASSWORD:-admin123}
+      DB_NAME: ${DB_NAME:-skill_connect_db}
+      
+      # MinIO Configuration
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT:-minio}
+      MINIO_PORT: ${MINIO_PORT:-9000}
+      MINIO_USE_SSL: ${MINIO_USE_SSL:-false}
+      MINIO_ACCESS_KEY: ${MINIO_USER:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_PASSWORD:-minioadmin123}
+      MINIO_BUCKET: ${MINIO_BUCKET:-skill-connect-bucket}
+      
+      # Email Configuration - Mailpit (Local Testing)
+      MAILPIT_HOST: mailpit
+      MAILPIT_PORT: 1025
+      
+      # Email Configuration - SendPulse (Production)
+      SENDPULSE_SMTP_HOST: ${SENDPULSE_HOST:-smtp.sendpulse.com}
+      SENDPULSE_SMTP_PORT: ${SENDPULSE_PORT:-587}
+      SENDPULSE_USER: ${SENDPULSE_USER:- }
+      SENDPULSE_PASS: ${SENDPULSE_PASS:- }
+      SENDPULSE_MAX_USERS: ${SENDPULSE_MAX_USERS:-300}
+      SENDPULSE_MAX_EMAILS: ${SENDPULSE_MAX_EMAILS:-12000}
+      
+      # Email Configuration - Mailpilt (Fallback)
+      MAILPILT_API_KEY: ${MAILPILT_API_KEY:- }
+      MAILPILT_DOMAIN: ${MAILPILT_DOMAIN:- }
+      
+      # Admin Configuration
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@skillconnect.com}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin123}
+    volumes:
+      - ./backend:/app
+      - /app/node_modules
+    networks:
+      - skill_connect_network
+
+  # -------- FRONTEND --------
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: skill_connect_frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "3000:3000"
+    environment:
+      # CRITICAL: Browser on Windows needs http://localhost:5000, not http://backend:5000
+      # The container exposes ports to localhost, so browser uses localhost
+      REACT_APP_API_URL: ${REACT_APP_API_URL:-http://localhost:5000}
+      REACT_APP_ENV: ${NODE_ENV:-development}
+      NODE_ENV: ${NODE_ENV:-development}
+    volumes:
+      - ./frontend/src:/app/src
+      - ./frontend/public:/app/public
+    networks:
+      - skill_connect_network
+
+volumes:
+  pgdata:
+    driver: local
+  minio_data:
+    driver: local
+
+networks:
+  skill_connect_network:
+    driver: bridge

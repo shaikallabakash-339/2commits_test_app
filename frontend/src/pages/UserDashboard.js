@@ -1,0 +1,1022 @@
+/*
+ * Copyright (c) 2026 Your Company Name
+ * All rights reserved.
+ */
+import React, { useState, useEffect, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
+import axios from 'axios';
+import { motion, AnimatePresence } from 'framer-motion';
+import {
+  Home, MessageSquare, Bell, LogOut, Search, Send, Upload, FileText, Trash2,
+  ChevronDown, Settings, User, Users, Zap, Lock, CreditCard
+} from 'lucide-react';
+import { showToast } from '../utils/toast';
+import '../styles/user-dashboard.css';
+
+function UserDashboard() {
+  const navigate = useNavigate();
+  const messagesEndRef = useRef(null);
+  const fileInputRef = useRef(null);
+
+  // Auth & User State
+  const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [isUpdatingProfile, setIsUpdatingProfile] = useState(false); // Fixed: this was declared but not used properly
+
+  // UI State
+  const [activeTab, setActiveTab] = useState('home');
+  const [profileMenuOpen, setProfileMenuOpen] = useState(false);
+
+  // Home Tab State
+  const [allUsers, setAllUsers] = useState([]);
+  const [filteredUsers, setFilteredUsers] = useState([]);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [userSearchType, setUserSearchType] = useState('name');
+  const [profileUpdateMode, setProfileUpdateMode] = useState(false);
+  const [updatedProfile, setUpdatedProfile] = useState({});
+
+  // Messages Tab State
+  const [conversations, setConversations] = useState([]);
+  const [selectedUser, setSelectedUser] = useState(null);
+  const [messages, setMessages] = useState([]);
+  const [messageInput, setMessageInput] = useState('');
+  const [messageSearchQuery, setMessageSearchQuery] = useState('');
+  const [messageLoading, setMessageLoading] = useState(false);
+  const [conversationCount, setConversationCount] = useState(0);
+  const [isPremium, setIsPremium] = useState(false);
+  const [showPremiumWarning, setShowPremiumWarning] = useState(false);
+
+  // Notifications Tab State
+  const [notifications, setNotifications] = useState([]);
+  const [unreadCount, setUnreadCount] = useState(0);
+
+  // Resume State
+  const [resumes, setResumes] = useState([]);
+  const [resumeUploading, setResumeUploading] = useState(false);
+
+  // Initialize
+  useEffect(() => {
+    const userData = localStorage.getItem('user');
+    if (!userData) {
+      navigate('/login');
+      return;
+    }
+
+    const parsedUser = JSON.parse(userData);
+    setUser(parsedUser);
+    setUpdatedProfile(parsedUser);
+    setIsPremium(parsedUser.is_premium || false);
+
+    fetchUserProfile(parsedUser.email);
+    fetchAllUsers();
+    fetchConversations(parsedUser.id);
+    fetchNotifications(parsedUser.id);
+    fetchResumes(parsedUser.email);
+
+    setLoading(false);
+
+    // Polling for real-time updates
+    const interval = setInterval(() => {
+      if (selectedUser && parsedUser.id) {
+        fetchMessages(parsedUser.id, selectedUser.id);
+      }
+      fetchNotifications(parsedUser.id);
+      fetchConversations(parsedUser.id);
+    }, 5000);
+
+    return () => clearInterval(interval);
+  }, [navigate, selectedUser]);
+
+  const fetchUserProfile = async (email) => {
+    try {
+      const apiUrl = process.env.REACT_APP_API_URL || 'http://localhost:5000';
+      const res = await axios.get(`${apiUrl}/api/user/${email}`);
+      if (res.data.success) {
+        setUser(res.data.user);
+        setUpdatedProfile(res.data.user);
+        setIsPremium(res.data.user.is_premium || false);
+        localStorage.setItem('user', JSON.stringify(res.data.user));
+      }
+    } catch (err) {
+      console.error('Error fetching profile:', err);
+      showToast('Failed to load profile', 'error');
+    }
+  };
+
+  const fetchAllUsers = async () => {
+    try {
+      const apiUrl = process.env.REACT_APP_API_URL || 'http://localhost:5000';
+      const res = await axios.get(`${apiUrl}/api/all-users`);
+      if (res.data?.users) {
+        const filtered = res.data.users.filter(u => u.email !== user?.email);
+        setAllUsers(filtered);
+        setFilteredUsers(filtered);
+      }
+    } catch (err) {
+      console.error('Error fetching users:', err);
+      showToast('Failed to load users', 'error');
+    }
+  };
+
+  // Search filter
+  useEffect(() => {
+    if (!searchQuery.trim()) {
+      setFilteredUsers(allUsers);
+      return;
+    }
+    const query = searchQuery.toLowerCase();
+    const filtered = allUsers.filter(u => {
+      if (userSearchType === 'name') {
+        return u.fullname?.toLowerCase().includes(query);
+      } else if (userSearchType === 'company') {
+        return u.company_name?.toLowerCase().includes(query);
+      }
+      return false;
+    });
+    setFilteredUsers(filtered);
+  }, [searchQuery, userSearchType, allUsers]);
+
+  const fetchConversations = async (userId) => {
+    if (!userId) return;
+    try {
+      const apiUrl = process.env.REACT_APP_API_URL || 'http://localhost:5000';
+      const res = await axios.get(`${apiUrl}/api/conversations/${userId}`);
+      if (res.data.success) {
+        const safeConv = (res.data.conversations || []).map(conv => ({
+          ...conv,
+          conversation_partner_name: conv.conversation_partner_name || 'Unknown User',
+          partner_profile_image_url: conv.partner_profile_image_url || 'https://via.placeholder.com/40?text=U',
+          last_message: conv.last_message || '',
+          company_name: conv.company_name || '',
+        }));
+        setConversations(safeConv);
+        setConversationCount(safeConv.length);
+      }
+    } catch (err) {
+      console.error('Conversations fetch failed:', err);
+      showToast('Could not load conversations', 'error');
+    }
+  };
+
+  const fetchMessages = async (senderId, receiverId) => {
+    if (!senderId || !receiverId) return;
+    try {
+      const apiUrl = process.env.REACT_APP_API_URL || 'http://localhost:5000';
+      const res = await axios.get(`${apiUrl}/api/user-message/${senderId}/${receiverId}`);
+      if (res.data.success) {
+        setMessages(res.data.messages || []);
+        scrollToBottom();
+      }
+    } catch (err) {
+      console.error('Messages fetch failed:', err);
+    }
+  };
+
+  const fetchNotifications = async (userId) => {
+    if (!userId) return;
+    try {
+      const apiUrl = process.env.REACT_APP_API_URL || 'http://localhost:5000';
+      const res = await axios.get(`${apiUrl}/api/notifications/${userId}`);
+      if (res.data.success) {
+        setNotifications(res.data.notifications || []);
+        setUnreadCount(res.data.notifications?.filter(n => !n.is_read).length || 0);
+      }
+    } catch (err) {
+      console.error('Notifications fetch failed:', err);
+    }
+  };
+
+  const fetchResumes = async (email) => {
+    if (!email) return;
+    try {
+      const apiUrl = process.env.REACT_APP_API_URL || 'http://localhost:5000';
+      const res = await axios.get(`${apiUrl}/api/resumes/${email}`);
+      if (res.data.success) {
+        setResumes(res.data.resumes || []);
+      }
+    } catch (err) {
+      console.error('Resumes fetch failed:', err);
+      showToast('Failed to load resumes', 'error');
+    }
+  };
+
+  const handleSendMessage = async (e) => {
+    e.preventDefault();
+    if (!messageInput.trim() || !selectedUser) return;
+
+    if (!isPremium && conversationCount >= 5) {
+      setShowPremiumWarning(true);
+      return;
+    }
+
+    try {
+      const apiUrl = process.env.REACT_APP_API_URL || 'http://localhost:5000';
+      const res = await axios.post(`${apiUrl}/api/user-message/send`, {
+        senderId: user.id,
+        receiverId: selectedUser.id,
+        message: messageInput.trim(),
+      });
+
+      if (res.data.success) {
+        setMessageInput('');
+        await fetchMessages(user.id, selectedUser.id);
+        await fetchConversations(user.id);
+        showToast('Message sent!', 'success');
+      }
+    } catch (err) {
+      console.error('Send message failed:', err);
+      showToast('Failed to send message', 'error');
+    }
+  };
+
+  const handleSelectUser = (person) => {
+    const normalizedUser = {
+      id: person.id,
+      fullname: person.fullname || 'Unknown',
+      company_name: person.company_name || '',
+      profile_image_url: person.profile_image_url || 'https://via.placeholder.com/40',
+    };
+    setSelectedUser(normalizedUser);
+    setMessageLoading(true);
+    fetchMessages(user.id, person.id);
+    setTimeout(() => setMessageLoading(false), 400);
+  };
+
+  const handleResumeUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const validTypes = ['application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'];
+    if (!validTypes.includes(file.type)) {
+      showToast('Only PDF or Word files allowed', 'error');
+      return;
+    }
+
+    if (file.size > 5 * 1024 * 1024) {
+      showToast('File size must be less than 5MB', 'error');
+      return;
+    }
+
+    const formData = new FormData();
+    formData.append('resume', file);
+    formData.append('email', user.email);
+    formData.append('name', user.fullname);
+
+    setResumeUploading(true);
+    try {
+      const apiUrl = process.env.REACT_APP_API_URL || 'http://localhost:5000';
+      const res = await axios.post(`${apiUrl}/api/upload-resume`, formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+
+      if (res.data.success) {
+        showToast('Resume uploaded successfully!', 'success');
+        fetchResumes(user.email);
+      } else {
+        showToast(res.data.message || 'Upload failed', 'error');
+      }
+    } catch (err) {
+      console.error('Resume upload error:', err);
+      showToast('Error uploading resume', 'error');
+    } finally {
+      setResumeUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
+  const handleDeleteResume = async (resumeId) => {
+    if (!window.confirm('Delete this resume?')) return;
+
+    try {
+      const apiUrl = process.env.REACT_APP_API_URL || 'http://localhost:5000';
+      const res = await axios.delete(`${apiUrl}/api/resume/${resumeId}`);
+      if (res.data.success) {
+        showToast('Resume deleted', 'success');
+        fetchResumes(user.email);
+      } else {
+        showToast('Delete failed', 'error');
+      }
+    } catch (err) {
+      console.error('Delete resume error:', err);
+      showToast('Failed to delete resume', 'error');
+    }
+  };
+
+  const handleUpdateProfile = async () => {
+    if (!updatedProfile.fullname || !updatedProfile.email) {
+      showToast('Name and email are required', 'error');
+      return;
+    }
+
+    setIsUpdatingProfile(true);
+    try {
+      const apiUrl = process.env.REACT_APP_API_URL || 'http://localhost:5000';
+      const res = await axios.put(`${apiUrl}/api/user/${user.id}/update`, updatedProfile);
+
+      if (res.data.success) {
+        setUser(updatedProfile);
+        localStorage.setItem('user', JSON.stringify(updatedProfile));
+        setProfileUpdateMode(false);
+        showToast('Profile updated successfully!', 'success');
+      }
+    } catch (err) {
+      console.error('Profile update error:', err);
+      showToast('Failed to update profile', 'error');
+    } finally {
+      setIsUpdatingProfile(false);
+    }
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem('user');
+    navigate('/login');
+  };
+
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  };
+
+  if (loading) {
+    return (
+      <div className="loading-container">
+        <motion.div animate={{ rotate: 360 }} transition={{ repeat: Infinity, duration: 1.2 }}>
+          <Zap size={48} className="text-blue-500" />
+        </motion.div>
+        <p className="mt-4 text-gray-600">Loading your dashboard...</p>
+      </div>
+    );
+  }
+
+  return (
+    <motion.div
+      className="user-dashboard-new min-h-screen bg-gray-50"
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      transition={{ duration: 0.6 }}
+    >
+      {/* Sidebar - Profile */}
+      <aside className="dashboard-sidebar">
+        <motion.div
+          className="profile-card bg-white rounded-xl shadow-lg p-6"
+          initial={{ y: -20, opacity: 0 }}
+          animate={{ y: 0, opacity: 1 }}
+          transition={{ delay: 0.2 }}
+        >
+          <div className="profile-image-wrapper relative">
+            <img
+              src={user?.profile_image_url || 'https://via.placeholder.com/120?text=Profile'}
+              alt={user?.fullname}
+              className="profile-image-large w-32 h-32 rounded-full object-cover border-4 border-white shadow-md"
+            />
+            {isPremium && (
+              <div className="premium-badge absolute -bottom-2 -right-2 bg-yellow-400 text-white px-3 py-1 rounded-full text-xs font-bold flex items-center">
+                <CreditCard size={14} className="mr-1" /> Premium
+              </div>
+            )}
+          </div>
+
+          <h2 className="profile-name text-2xl font-bold mt-4 text-center">{user?.fullname}</h2>
+          <p className="profile-company text-gray-600 text-center">{user?.company_name || 'No company set'}</p>
+          <p className="profile-status text-center mt-2">
+            <span className={`status-badge px-3 py-1 rounded-full text-sm ${user?.status}`}>
+              {user?.status?.charAt(0).toUpperCase() + user?.status?.slice(1)}
+            </span>
+          </p>
+
+          <motion.button
+            className="update-profile-btn w-full mt-6 bg-blue-600 text-white py-3 rounded-lg font-medium hover:bg-blue-700 transition"
+            onClick={() => setProfileUpdateMode(!profileUpdateMode)}
+            whileHover={{ scale: 1.02 }}
+            whileTap={{ scale: 0.98 }}
+          >
+            <User size={18} className="inline mr-2" />
+            Update Profile
+          </motion.button>
+
+          <div className="sidebar-stats grid grid-cols-2 gap-4 mt-6">
+            <div className="stat-item text-center">
+              <p className="stat-label text-gray-500 text-sm">Conversations</p>
+              <p className="stat-value text-2xl font-bold">{conversationCount}</p>
+            </div>
+            <div className="stat-item text-center">
+              <p className="stat-label text-gray-500 text-sm">Notifications</p>
+              <p className="stat-value text-2xl font-bold">{unreadCount}</p>
+            </div>
+          </div>
+
+          {!isPremium && conversationCount >= 5 && (
+            <motion.button
+              className="upgrade-btn w-full mt-6 bg-gradient-to-r from-purple-600 to-pink-600 text-white py-3 rounded-lg font-medium hover:from-purple-700 hover:to-pink-700 transition"
+              onClick={() => navigate('/premium')}
+              whileHover={{ scale: 1.03 }}
+              whileTap={{ scale: 0.98 }}
+            >
+              <Zap size={18} className="inline mr-2" />
+              Upgrade to Premium
+            </motion.button>
+          )}
+        </motion.div>
+      </aside>
+
+      {/* Main Content */}
+      <main className="dashboard-main">
+        {/* Navbar */}
+        <nav className="dashboard-navbar bg-white shadow-sm">
+          <div className="navbar-center flex space-x-8">
+            <button
+              className={`nav-btn flex items-center space-x-2 px-4 py-2 rounded-lg ${activeTab === 'home' ? 'bg-blue-100 text-blue-700' : 'text-gray-600 hover:bg-gray-100'}`}
+              onClick={() => setActiveTab('home')}
+            >
+              <Home size={20} />
+              <span>Home</span>
+            </button>
+            <button
+              className={`nav-btn flex items-center space-x-2 px-4 py-2 rounded-lg ${activeTab === 'messages' ? 'bg-blue-100 text-blue-700' : 'text-gray-600 hover:bg-gray-100'}`}
+              onClick={() => setActiveTab('messages')}
+            >
+              <MessageSquare size={20} />
+              <span>Messages</span>
+              {conversationCount > 0 && (
+                <span className="badge bg-blue-600 text-white text-xs px-2 py-1 rounded-full">{conversationCount}</span>
+              )}
+            </button>
+            <button
+              className={`nav-btn flex items-center space-x-2 px-4 py-2 rounded-lg ${activeTab === 'notifications' ? 'bg-blue-100 text-blue-700' : 'text-gray-600 hover:bg-gray-100'}`}
+              onClick={() => setActiveTab('notifications')}
+            >
+              <Bell size={20} />
+              <span>Notifications</span>
+              {unreadCount > 0 && (
+                <span className="badge bg-red-500 text-white text-xs px-2 py-1 rounded-full">{unreadCount}</span>
+              )}
+            </button>
+          </div>
+
+          {/* Profile Menu */}
+          <div className="navbar-right relative">
+            <button
+              className="flex items-center space-x-2"
+              onClick={() => setProfileMenuOpen(!profileMenuOpen)}
+            >
+              <img
+                src={user?.profile_image_url || 'https://via.placeholder.com/40?text=U'}
+                alt="Profile"
+                className="w-10 h-10 rounded-full object-cover"
+              />
+              <ChevronDown size={16} />
+            </button>
+
+            <AnimatePresence>
+              {profileMenuOpen && (
+                <motion.div
+                  className="profile-dropdown-menu absolute right-0 mt-2 w-64 bg-white rounded-xl shadow-xl border border-gray-200 z-50"
+                  initial={{ opacity: 0, y: -10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -10 }}
+                >
+                  <div className="dropdown-header p-4 border-b">
+                    <h4 className="font-semibold">{user?.fullname}</h4>
+                    <p className="text-sm text-gray-500">{user?.email}</p>
+                  </div>
+                  <button className="dropdown-item w-full text-left px-4 py-3 hover:bg-gray-50 flex items-center space-x-3">
+                    <User size={18} /> View Profile
+                  </button>
+                  <button className="dropdown-item w-full text-left px-4 py-3 hover:bg-gray-50 flex items-center space-x-3">
+                    <Settings size={18} /> Settings
+                  </button>
+                  <button className="dropdown-item premium w-full text-left px-4 py-3 hover:bg-gray-50 flex items-center space-x-3">
+                    <Zap size={18} />
+                    {isPremium ? 'Premium Active' : 'Upgrade to Premium'}
+                  </button>
+                  <hr className="my-2" />
+                  <button
+                    className="dropdown-item logout w-full text-left px-4 py-3 text-red-600 hover:bg-red-50 flex items-center space-x-3"
+                    onClick={handleLogout}
+                  >
+                    <LogOut size={18} /> Logout
+                  </button>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+        </nav>
+
+        {/* Welcome Banner */}
+        <motion.div
+          className="welcome-banner bg-gradient-to-r from-blue-600 to-purple-600 text-white p-8 rounded-xl shadow-lg mb-8"
+          initial={{ opacity: 0, y: -20 }}
+          animate={{ opacity: 1, y: 0 }}
+        >
+          <h1 className="text-3xl font-bold">👋 Welcome back, {user?.fullname?.split(' ')[0]}!</h1>
+          <p className="mt-2 opacity-90">Connect, chat, and grow your professional network</p>
+        </motion.div>
+
+        {/* Tab Content */}
+        <div className="tab-content">
+          {/* HOME TAB */}
+          {activeTab === 'home' && (
+            <motion.div className="home-section space-y-8">
+              {/* Profile Update Form */}
+              {profileUpdateMode && (
+                <motion.div
+                  className="profile-update-card bg-white p-8 rounded-xl shadow-lg"
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                >
+                  <h3 className="text-2xl font-bold mb-6">Update Your Profile</h3>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div className="form-group">
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Full Name</label>
+                      <input
+                        type="text"
+                        value={updatedProfile.fullname || ''}
+                        onChange={(e) => setUpdatedProfile({ ...updatedProfile, fullname: e.target.value })}
+                        className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                        placeholder="Your full name"
+                      />
+                    </div>
+                    <div className="form-group">
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Email</label>
+                      <input
+                        type="email"
+                        value={updatedProfile.email || ''}
+                        onChange={(e) => setUpdatedProfile({ ...updatedProfile, email: e.target.value })}
+                        className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                        placeholder="your@email.com"
+                      />
+                    </div>
+                    <div className="form-group">
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Company Name</label>
+                      <input
+                        type="text"
+                        value={updatedProfile.company_name || ''}
+                        onChange={(e) => setUpdatedProfile({ ...updatedProfile, company_name: e.target.value })}
+                        className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                        placeholder="Your company"
+                      />
+                    </div>
+                    <div className="form-group">
+                      <label className="block text-sm font-medium text-gray-700 mb-2">City</label>
+                      <input
+                        type="text"
+                        value={updatedProfile.city || ''}
+                        onChange={(e) => setUpdatedProfile({ ...updatedProfile, city: e.target.value })}
+                        className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                        placeholder="Your city"
+                      />
+                    </div>
+                    <div className="form-group md:col-span-2">
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Status</label>
+                      <select
+                        value={updatedProfile.status || 'pursuing'}
+                        onChange={(e) => setUpdatedProfile({ ...updatedProfile, status: e.target.value })}
+                        className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                      >
+                        <option value="pursuing">Pursuing</option>
+                        <option value="graduated">Graduated</option>
+                        <option value="employed">Employed</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="form-actions flex justify-end space-x-4 mt-8">
+                    <motion.button
+                      className="btn-secondary px-6 py-3 border border-gray-300 rounded-lg hover:bg-gray-50"
+                      onClick={() => setProfileUpdateMode(false)}
+                      whileHover={{ scale: 1.02 }}
+                      whileTap={{ scale: 0.98 }}
+                    >
+                      Cancel
+                    </motion.button>
+                    <motion.button
+                      className="btn-primary px-8 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                      onClick={handleUpdateProfile}
+                      disabled={isUpdatingProfile} // ← Fixed: now correctly uses the state variable
+                      whileHover={{ scale: 1.02 }}
+                      whileTap={{ scale: 0.98 }}
+                    >
+                      {isUpdatingProfile ? 'Saving...' : 'Save Changes'} {/* ← Fixed: now shows loading state */}
+                    </motion.button>
+                  </div>
+                </motion.div>
+              )}
+
+              {/* Resume Section */}
+              <motion.div
+                className="resume-section bg-white p-8 rounded-xl shadow-lg"
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+              >
+                <div className="flex justify-between items-center mb-6">
+                  <h3 className="text-2xl font-bold flex items-center">
+                    <FileText size={24} className="mr-3 text-blue-600" />
+                    Your Resumes
+                  </h3>
+                  <motion.button
+                    className="upload-resume-btn flex items-center px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={resumeUploading}
+                    whileHover={{ scale: 1.02 }}
+                    whileTap={{ scale: 0.98 }}
+                  >
+                    <Upload size={18} className="mr-2" />
+                    {resumeUploading ? 'Uploading...' : 'Upload New Resume'}
+                  </motion.button>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept=".pdf,.doc,.docx"
+                    onChange={handleResumeUpload}
+                    style={{ display: 'none' }}
+                  />
+                </div>
+
+                <div className="resumes-list space-y-4">
+                  {resumes.length > 0 ? (
+                    resumes.map((resume, idx) => (
+                      <motion.div
+                        key={resume.id}
+                        className="resume-item flex justify-between items-center p-4 bg-gray-50 rounded-lg hover:bg-gray-100 transition"
+                        initial={{ opacity: 0, x: -20 }}
+                        animate={{ opacity: 1, x: 0 }}
+                        transition={{ delay: idx * 0.05 }}
+                      >
+                        <div className="resume-info flex items-center space-x-4">
+                          <FileText size={28} className="text-blue-600" />
+                          <div>
+                            <p className="font-medium">{resume.file_name}</p>
+                            <p className="text-sm text-gray-500">
+                              Uploaded: {new Date(resume.created_at).toLocaleDateString()}
+                            </p>
+                          </div>
+                        </div>
+                        <div className="resume-actions flex space-x-3">
+                          <motion.a
+                            href={resume.minio_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="btn-view px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+                            whileHover={{ scale: 1.05 }}
+                            whileTap={{ scale: 0.95 }}
+                          >
+                            View
+                          </motion.a>
+                          <motion.button
+                            className="btn-delete px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700"
+                            onClick={() => handleDeleteResume(resume.id)}
+                            whileHover={{ scale: 1.05 }}
+                            whileTap={{ scale: 0.95 }}
+                          >
+                            <Trash2 size={18} />
+                          </motion.button>
+                        </div>
+                      </motion.div>
+                    ))
+                  ) : (
+                    <div className="empty-state text-center py-12">
+                      <FileText size={64} className="mx-auto text-gray-300" />
+                      <p className="mt-4 text-gray-500">No resumes uploaded yet</p>
+                      <button
+                        className="mt-4 px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+                        onClick={() => fileInputRef.current?.click()}
+                      >
+                        Upload Your First Resume
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </motion.div>
+
+              {/* Browse Users */}
+              <motion.div
+                className="browse-users-section bg-white p-8 rounded-xl shadow-lg"
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+              >
+                <h3 className="text-2xl font-bold mb-6 flex items-center">
+                  <Users size={24} className="mr-3 text-blue-600" />
+                  Browse Professionals
+                </h3>
+
+                <div className="search-filters flex flex-col md:flex-row gap-4 mb-8">
+                  <div className="search-container flex-1 relative">
+                    <Search size={18} className="absolute left-4 top-1/2 transform -translate-y-1/2 text-gray-400" />
+                    <input
+                      type="text"
+                      placeholder="Search by name or company..."
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      className="w-full pl-12 pr-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    />
+                  </div>
+
+                  <div className="filter-buttons flex space-x-3">
+                    <button
+                      className={`filter-btn px-6 py-3 rounded-lg ${userSearchType === 'name' ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-700'}`}
+                      onClick={() => setUserSearchType('name')}
+                    >
+                      By Name
+                    </button>
+                    <button
+                      className={`filter-btn px-6 py-3 rounded-lg ${userSearchType === 'company' ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-700'}`}
+                      onClick={() => setUserSearchType('company')}
+                    >
+                      By Company
+                    </button>
+                  </div>
+                </div>
+
+                <div className="users-grid grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                  {filteredUsers.length > 0 ? (
+                    filteredUsers.map((person, idx) => (
+                      <motion.div
+                        key={person.id}
+                        className="user-card bg-white border border-gray-200 rounded-xl shadow-sm hover:shadow-md transition-all duration-300 overflow-hidden"
+                        initial={{ opacity: 0, y: 20 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ delay: idx * 0.05 }}
+                        whileHover={{ y: -5, boxShadow: '0 10px 30px rgba(0,0,0,0.1)' }}
+                      >
+                        <div className="user-card-header p-6 pb-0">
+                          <div className="flex items-center space-x-4">
+                            <div className="user-avatar w-16 h-16 rounded-full overflow-hidden bg-gray-100">
+                              {person.profile_image_url ? (
+                                <img src={person.profile_image_url} alt={person.fullname} className="w-full h-full object-cover" />
+                              ) : (
+                                <div className="w-full h-full flex items-center justify-center text-gray-400">
+                                  <User size={32} />
+                                </div>
+                              )}
+                            </div>
+                            <div>
+                              <h4 className="font-bold text-lg">{person.fullname}</h4>
+                              <p className="text-gray-600">{person.company_name || 'No company'}</p>
+                            </div>
+                          </div>
+                          <span className={`status-badge inline-block mt-3 px-4 py-1 rounded-full text-sm ${person.status}`}>
+                            {person.status?.charAt(0).toUpperCase() + person.status?.slice(1)}
+                          </span>
+                        </div>
+
+                        <div className="p-6 pt-4">
+                          <motion.button
+                            className="message-btn w-full bg-blue-600 text-white py-3 rounded-lg hover:bg-blue-700 transition flex items-center justify-center"
+                            onClick={() => handleSelectUser(person)}
+                            whileHover={{ scale: 1.03 }}
+                            whileTap={{ scale: 0.97 }}
+                          >
+                            <MessageSquare size={18} className="mr-2" />
+                            Send Message
+                          </motion.button>
+                        </div>
+                      </motion.div>
+                    ))
+                  ) : (
+                    <div className="col-span-full text-center py-12">
+                      <Users size={64} className="mx-auto text-gray-300" />
+                      <p className="mt-4 text-gray-500 text-lg">No professionals found matching your search</p>
+                    </div>
+                  )}
+                </div>
+              </motion.div>
+            </motion.div>
+          )}
+
+          {/* MESSAGES TAB */}
+          {activeTab === 'messages' && (
+            <motion.div className="messages-section bg-white rounded-xl shadow-lg overflow-hidden">
+              <div className="messages-container flex h-[70vh]">
+                {/* Conversations List */}
+                <div className="conversations-list w-1/3 border-r border-gray-200 bg-gray-50">
+                  <div className="p-6 border-b border-gray-200">
+                    <h3 className="text-xl font-bold">Conversations</h3>
+                    <div className="mt-4 relative">
+                      <Search size={18} className="absolute left-4 top-1/2 transform -translate-y-1/2 text-gray-400" />
+                      <input
+                        type="text"
+                        placeholder="Search conversations..."
+                        value={messageSearchQuery}
+                        onChange={(e) => setMessageSearchQuery(e.target.value)}
+                        className="w-full pl-12 pr-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                      />
+                    </div>
+
+                    <p className="conversation-limit mt-4 text-sm">
+                      {isPremium ? (
+                        <span className="text-green-600 font-medium flex items-center">
+                          <Zap size={16} className="mr-1" /> Unlimited conversations
+                        </span>
+                      ) : (
+                        <span className="text-orange-600 font-medium flex items-center">
+                          <Lock size={16} className="mr-1" /> {conversationCount}/5 conversations used
+                        </span>
+                      )}
+                    </p>
+                  </div>
+
+                  <div className="conversations-items overflow-y-auto h-[calc(70vh-180px)]">
+                    {conversations.length > 0 ? (
+                      conversations.map((conv) => (
+                        <motion.div
+                          key={conv.conversation_partner_id}
+                          className={`conversation-item p-4 border-b border-gray-200 hover:bg-gray-100 cursor-pointer flex items-center space-x-4 ${
+                            selectedUser?.id === conv.conversation_partner_id ? 'bg-blue-50' : ''
+                          }`}
+                          onClick={() => handleSelectUser({
+                            id: conv.conversation_partner_id,
+                            fullname: conv.conversation_partner_name,
+                            profile_image_url: conv.partner_profile_image_url,
+                            company_name: conv.company_name || '',
+                          })}
+                          whileHover={{ x: 4 }}
+                        >
+                          <img
+                            src={conv.partner_profile_image_url || 'https://via.placeholder.com/48?text=U'}
+                            alt={conv.conversation_partner_name}
+                            className="w-12 h-12 rounded-full object-cover"
+                            onError={(e) => (e.target.src = 'https://via.placeholder.com/48?text=U')}
+                          />
+                          <div className="flex-1 min-w-0">
+                            <p className="font-medium truncate">{conv.conversation_partner_name}</p>
+                            <p className="text-sm text-gray-500 truncate">
+                              {conv.last_message || 'Start a conversation...'}
+                            </p>
+                          </div>
+                        </motion.div>
+                      ))
+                    ) : (
+                      <div className="empty-state text-center py-12 px-6">
+                        <MessageSquare size={48} className="mx-auto text-gray-300" />
+                        <p className="mt-4 text-gray-500">No conversations yet</p>
+                        <p className="text-sm text-gray-400 mt-2">Start by messaging someone from the Home tab</p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Chat Area */}
+                <div className="chat-area flex-1 flex flex-col">
+                  {selectedUser ? (
+                    <>
+                      <div className="chat-header p-6 border-b border-gray-200 bg-white">
+                        <div className="flex items-center space-x-4">
+                          <img
+                            src={selectedUser.profile_image_url || 'https://via.placeholder.com/48'}
+                            alt={selectedUser.fullname}
+                            className="w-12 h-12 rounded-full object-cover"
+                          />
+                          <div>
+                            <h4 className="font-bold text-lg">{selectedUser.fullname}</h4>
+                            <p className="text-gray-600">{selectedUser.company_name || 'No company'}</p>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="messages-display flex-1 p-6 overflow-y-auto bg-gray-50">
+                        {messageLoading ? (
+                          <div className="text-center py-12">
+                            <p className="text-gray-500">Loading messages...</p>
+                          </div>
+                        ) : messages.length > 0 ? (
+                          messages.map((msg, idx) => (
+                            <motion.div
+                              key={idx}
+                              className={`message mb-4 flex ${msg.sender_id === user.id ? 'justify-end' : 'justify-start'}`}
+                              initial={{ opacity: 0, y: 10 }}
+                              animate={{ opacity: 1, y: 0 }}
+                              transition={{ delay: idx * 0.02 }}
+                            >
+                              <div
+                                className={`max-w-[70%] px-5 py-3 rounded-2xl ${
+                                  msg.sender_id === user.id
+                                    ? 'bg-blue-600 text-white rounded-tr-none'
+                                    : 'bg-gray-200 text-gray-800 rounded-tl-none'
+                                }`}
+                              >
+                                <p>{msg.message}</p>
+                                <span className="text-xs opacity-70 mt-1 block">
+                                  {new Date(msg.created_at).toLocaleTimeString([], {
+                                    hour: '2-digit',
+                                    minute: '2-digit',
+                                  })}
+                                </span>
+                              </div>
+                            </motion.div>
+                          ))
+                        ) : (
+                          <div className="empty-chat text-center py-20">
+                            <MessageSquare size={64} className="mx-auto text-gray-300" />
+                            <p className="mt-6 text-gray-600 text-lg">No messages yet</p>
+                            <p className="text-gray-400 mt-2">Say something to start the conversation!</p>
+                          </div>
+                        )}
+                        <div ref={messagesEndRef} />
+                      </div>
+
+                      {showPremiumWarning && (
+                        <div className="premium-warning bg-yellow-100 border-l-4 border-yellow-500 p-4 mx-6 mb-4 rounded">
+                          <div className="flex items-center">
+                            <Zap size={20} className="text-yellow-600 mr-3" />
+                            <span className="text-yellow-800">You've reached the 5-conversation limit for free users.</span>
+                          </div>
+                          <button
+                            onClick={() => navigate('/premium')}
+                            className="mt-3 px-6 py-2 bg-yellow-600 text-white rounded-lg hover:bg-yellow-700"
+                          >
+                            Upgrade to Premium
+                          </button>
+                        </div>
+                      )}
+
+                      <form
+                        className="message-input-form p-6 border-t border-gray-200 bg-white flex space-x-4"
+                        onSubmit={handleSendMessage}
+                      >
+                        <input
+                          type="text"
+                          value={messageInput}
+                          onChange={(e) => setMessageInput(e.target.value)}
+                          placeholder="Type your message..."
+                          disabled={showPremiumWarning || !selectedUser}
+                          className="flex-1 px-6 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:opacity-50"
+                        />
+                        <motion.button
+                          type="submit"
+                          disabled={!messageInput.trim() || showPremiumWarning || !selectedUser}
+                          className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                          whileHover={{ scale: 1.05 }}
+                          whileTap={{ scale: 0.95 }}
+                        >
+                          <Send size={20} />
+                        </motion.button>
+                      </form>
+                    </>
+                  ) : (
+                    <div className="empty-chat flex-1 flex flex-col items-center justify-center bg-gray-50">
+                      <MessageSquare size={80} className="text-gray-300 mb-6" />
+                      <h3 className="text-2xl font-bold text-gray-600 mb-2">Your Messages</h3>
+                      <p className="text-gray-500 max-w-md text-center">
+                        Select a conversation from the list or start a new one by messaging someone from the Home tab
+                      </p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </motion.div>
+          )}
+
+          {/* NOTIFICATIONS TAB */}
+          {activeTab === 'notifications' && (
+            <motion.div
+              className="notifications-section bg-white p-8 rounded-xl shadow-lg"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+            >
+              <h2 className="text-3xl font-bold mb-8">Notifications</h2>
+
+              <div className="notifications-container space-y-4">
+                {notifications.length > 0 ? (
+                  notifications.map((notif, idx) => (
+                    <motion.div
+                      key={idx}
+                      className={`notification-item p-6 rounded-xl border-l-4 ${
+                        notif.is_read ? 'bg-gray-50 border-gray-300' : 'bg-blue-50 border-blue-500'
+                      }`}
+                      initial={{ opacity: 0, x: -20 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      transition={{ delay: idx * 0.05 }}
+                    >
+                      <div className="flex items-start space-x-4">
+                        <div className="notif-icon text-3xl">
+                          {notif.type === 'admin' ? <Bell className="text-blue-600" /> : <MessageSquare className="text-green-600" />}
+                        </div>
+                        <div className="flex-1">
+                          <h4 className="font-bold text-lg">{notif.title}</h4>
+                          <p className="text-gray-700 mt-1">{notif.message}</p>
+                          <span className="notif-type text-sm text-gray-500 mt-2 block">
+                            {notif.type === 'admin' ? '📢 Admin Announcement' : '💬 Message'}
+                          </span>
+                        </div>
+                        <span className="notif-time text-sm text-gray-500 whitespace-nowrap">
+                          {new Date(notif.created_at).toLocaleString()}
+                        </span>
+                      </div>
+                    </motion.div>
+                  ))
+                ) : (
+                  <div className="empty-notification text-center py-20">
+                    <Bell size={80} className="mx-auto text-gray-300" />
+                    <p className="mt-6 text-gray-600 text-xl">No notifications yet</p>
+                    <p className="text-gray-400 mt-2">We'll notify you when something important happens</p>
+                  </div>
+                )}
+              </div>
+            </motion.div>
+          )}
+        </div>
+      </main>
+    </motion.div>
+  );
+}
+
+export default UserDashboard;
