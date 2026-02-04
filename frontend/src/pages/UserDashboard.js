@@ -283,6 +283,8 @@ function UserDashboard() {
         await fetchMessages(user.id, selectedUser.id);
         await fetchConversations(user.id);
         showToast('Message sent!', 'success');
+      } else {
+        showToast(res.data.message || 'Failed to send message', 'error');
       }
     } catch (err) {
       console.error('Send message failed:', err);

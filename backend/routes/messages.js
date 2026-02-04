@@ -262,7 +262,7 @@ router.post('/user-message/send', async (req, res) => {
         is_active = true
       RETURNING id
     `;
-    await pool.query(conversationQuery, [senderId, receiverId, sanitizeString(message)]);
+    await pool.query(conversationQuery, [senderId, receiverId, sanitizeString(messageText)]);
 
     // Create notification for receiver
     const notificationQuery = `
@@ -286,7 +286,7 @@ router.post('/user-message/send', async (req, res) => {
       sendEmail(
         receiverEmailResult.rows[0].email,
         'New Message on Skill Connect',
-        `${senderName} sent you a message: "${message}"`,
+        `${senderName} sent you a message: "${messageText}"`,
         senderId
       ).catch(err => console.error('[v0] Email notification failed:', err.message));
     }
@@ -306,7 +306,7 @@ router.post('/user-message/send', async (req, res) => {
     res.status(201).json({
       success: true,
       message: 'Message sent successfully',
-      message: messageResult.rows[0]
+      data: createdMessage
     });
   } catch (err) {
     console.error('[v0] Error sending user message:', err);
